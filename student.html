@@ -267,6 +267,22 @@ async function init(){
     const{data:wsRow}=await sb.from('worksheets').select('class_name,class_category').eq('id',Number(WS_PARAM)).maybeSingle();
     if(wsRow)wsTargetFilter=wsRow;
   }
+  // 이 기기에 저장된 이전 선택(반/학생)이 있어도, 지금 들어온 링크가 특정 분류나 특정 학습지로 범위를
+  // 좁힌 링크인데 그 범위 밖의 반이면 캐시를 쓰지 않고 새로 고르게 함 - 예를 들어 "교과" 탭 링크로
+  // 들어왔는데 예전에 다른 탭(동아리 등)에서 고른 반이 그대로 뜨는 걸 방지.
+  const catByClass={};
+  roster.forEach(r=>{catByClass[r.class_name]=r.class_category||'교과';});
+  if(selClass){
+    const scopeOk=wsTargetFilter?.class_name?selClass===wsTargetFilter.class_name
+      :wsTargetFilter?.class_category?catByClass[selClass]===wsTargetFilter.class_category
+      :CAT_PARAM?catByClass[selClass]===CAT_PARAM
+      :true;
+    if(!scopeOk){
+      localStorage.removeItem('ws_sel_student_'+selClass);
+      localStorage.removeItem('ws_sel_class');
+      selClass='';selStudent=null;
+    }
+  }
   const savedStudentId=localStorage.getItem('ws_sel_student_'+selClass);
   if(selClass&&savedStudentId){
     const s=roster.find(r=>String(r.id)===savedStudentId&&r.class_name===selClass);
