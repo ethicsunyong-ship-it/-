@@ -470,11 +470,17 @@ async function openWorksheet(wsId){
   if(w.kind==='padlet'){renderPadletBoard(w);return;}
   if(sub?.submitted){renderSubmittedScreen();return;}
   if(w.access_code&&!curAccessUnlocked){renderAccessGate();return;}
+  proceedAfterAccessGranted();
+}
+// 접속 코드(고유번호) 확인을 통과한 뒤 실제로 학습지를 보여주는 부분 - openWorksheet에서 곧장 가는 경우와
+// renderAccessGate에서 PIN 확인 통과한 뒤 가는 경우가 로직이 같아서 하나로 묶어둠.
+function proceedAfterAccessGranted(){
+  const w=curWorksheet;
   // 통째로 붙여넣은 커스텀 HTML 학습지(예: 윤리토론장)는 iframe으로 그대로 띄우고, "제출하기"를 누르면
   // postMessage로 결과가 날아와서 여기서 Supabase에 저장함 (renderCustomHtmlWorksheet 안에서 처리)
   if(w.kind==='custom_html'){renderCustomHtmlWorksheet(false);return;}
   const needsGroup=(w.steps||[]).some(s=>s.scope==='group');
-  if(needsGroup&&!sub?.group_code){renderGroupGate();return;}
+  if(needsGroup&&!curSub?.group_code){renderGroupGate();return;}
   renderStepWizard();
 }
 // ================= 패들렛(담벼락) =================
@@ -682,26 +688,51 @@ function padletTimeAgo(iso){
   if(diff<86400)return `${Math.floor(diff/3600)}시간 전`;
   return new Date(iso).toLocaleDateString('ko-KR');
 }
+// 이 학습지는 입장 시 학생 본인의 4자리 고유번호(로그인 때 쓰는 것과 동일)를 다시 확인함.
 function renderAccessGate(){
   const app=document.getElementById('app');
   app.innerHTML=`<span class="back" onclick="renderWorksheetList()">← 학습지 목록으로</span>
     <div class="hd">${escHtml(curWorksheet.title)}</div>
-    <div class="card"><label>선생님이 알려주신 입장 코드를 입력하세요</label>
-    <input type="text" id="wsAccessInp" placeholder="입장 코드"/>
-    <div id="wsAccessErr" style="color:#dc2626;font-size:12px;margin-top:6px;"></div>
-    <button class="btn primary" style="margin-top:10px;" onclick="checkAccessCode()">입장하기</button>
+    <div class="card" style="text-align:center;">
+      <div style="font-size:13px;color:#555;margin-bottom:18px;">본인 확인을 위해 비밀번호 4자리를 입력하세요</div>
+      <div style="display:flex;gap:10px;justify-content:center;">
+        ${[0,1,2,3].map(i=>`<input class="pin-box" id="wsAccessPin${i}" maxlength="1" inputmode="numeric" pattern="[0-9]*" oninput="wsAccessPinInput(${i},this)" onkeydown="wsAccessPinKeydown(${i},event)"/>`).join('')}
+      </div>
+      <div id="wsAccessErr" style="color:#dc2626;font-size:12px;margin-top:14px;min-height:16px;"></div>
+      <button class="btn primary" style="margin-top:6px;" onclick="checkAccessPin()">확인</button>
     </div>`;
+  setTimeout(()=>document.getElementById('wsAccessPin0')?.focus(),0);
 }
-function checkAccessCode(){
-  const v=(document.getElementById('wsAccessInp')?.value||'').trim();
-  if(v!==curWorksheet.access_code){
-    const e=document.getElementById('wsAccessErr');if(e)e.textContent='코드가 맞지 않아요. 다시 확인해주세요.';
+function wsAccessPinValue(){
+  return [0,1,2,3].map(i=>document.getElementById('wsAccessPin'+i)?.value||'').join('');
+}
+function wsAccessPinInput(i,el){
+  el.value=el.value.replace(/[^0-9]/g,'').slice(0,1);
+  if(el.value&&i<3)document.getElementById('wsAccessPin'+(i+1))?.focus();
+  if(wsAccessPinValue().length===4)checkAccessPin();
+}
+function wsAccessPinKeydown(i,e){
+  if(e.key==='Backspace'&&!e.target.value&&i>0)document.getElementById('wsAccessPin'+(i-1))?.focus();
+  if(e.key==='Enter')checkAccessPin();
+}
+async function checkAccessPin(){
+  const v=wsAccessPinValue();
+  const errEl=document.getElementById('wsAccessErr');
+  if(!/^\d{4}$/.test(v)){if(errEl)errEl.textContent='숫자 4자리를 모두 입력해주세요.';return;}
+  const{data,error}=await sb.rpc('check_student_pin',{p_student_id:selStudent.id,p_pin:v});
+  if(error){
+    console.error('check_student_pin RPC error:',error);
+    if(errEl)errEl.textContent=`확인 중 오류: ${error.message||error.code||'알 수 없는 오류'} (선생님께 이 문구를 보여주세요)`;
+    return;
+  }
+  if(!data){
+    if(errEl)errEl.textContent='비밀번호가 맞지 않아요. 잘 모르겠으면 선생님께 여쭤보세요.';
+    [0,1,2,3].forEach(i=>{const b=document.getElementById('wsAccessPin'+i);if(b)b.value='';});
+    document.getElementById('wsAccessPin0')?.focus();
     return;
   }
   curAccessUnlocked=true;
-  const needsGroup=(curWorksheet.steps||[]).some(s=>s.scope==='group');
-  if(needsGroup&&!curSub?.group_code){renderGroupGate();return;}
-  renderStepWizard();
+  proceedAfterAccessGranted();
 }
 function renderGroupGate(){
   const app=document.getElementById('app');
